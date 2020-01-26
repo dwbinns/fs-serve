@@ -19,39 +19,52 @@ class Server {
         try {
             let requestURL = new URL(req.url, "http://localhost");
     
-            let decodedPath = decodeURI(requestURL.pathname);
-        
-            let filename = join(this.root, decodedPath);
-
-            //console.log(req.url, requestURL.pathname, decodedPath, filename);
-
-            await this.servePath(filename, req, res);
+            let result = await this.serveRelative(decodeURI(requestURL.pathname), req, res);
+            console.log(req.url, res.statusCode, result);
         } catch (e) {
-            this.serve404(req, res);
+            console.log(e);
+            this.serve500(req, res);
         }
+    }
+
+    async serveRelative(path, req, res) {
+        return await this.servePath(join(this.root, path), req, res);
     }
 
     async servePath(filename, req, res) {
         let stats = await stat(filename).catch(e => null);
-        if (!stats) this.serve404(req, res);
-        else if (stats.isDirectory()) await this.serveDirectory(filename, stats, req, res);
-        else if (stats.isFile()) await this.serveFile(filename, stats, req, res);
-        else this.serve404(req, res);
+        if (stats && stats.isDirectory()) return await this.serveDirectory(filename, stats, req, res);
+        if (stats && stats.isFile()) return await this.serveFile(filename, stats, req, res);
+        return this.serve404(req, res);
+    }
+
+    serve500(req, res) {
+        res.writeHeader(500, {});
+        res.end();
+        return "";
     }
 
     serve404(req, res) {
         res.writeHeader(404, {});
         res.end();
+        return "";
+    }
+
+    serveRedirect(req, res, Location) {
+        res.writeHeader(301, {Location});
+        res.end();
+        return location; 
+    }
+
+    serveRedirectSlash(req, res) {
+        return this.serveRedirect(req, res, req.url + "/");
     }
 
     async serveDirectory(filename, stats, req, res) {
         if (!filename.endsWith('/')) {
-            res.writeHeader(301, {
-                Location: encodeURI(filename + "/")
-            });
-            res.end();
+            return this.serveRedirectSlash(req, res);
         } else {
-            await this.servePath(`${filename}index.html`, req, res);
+            return await this.servePath(`${filename}index.html`, req, res);
         }
     }
 
@@ -66,7 +79,7 @@ class Server {
         if (requestEtags.includes(etag)) {
             res.writeHead(304, headers);
             res.end();
-            return;
+            return filename;
         }
 
         headers['Content-Length'] = stats.size;
@@ -76,6 +89,8 @@ class Server {
         res.writeHead(200, headers);
 
         createReadStream(filename).pipe(res);
+
+        return filename;
     }
 }
     
