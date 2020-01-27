@@ -6,7 +6,9 @@ var mime={
     html: 'text/html; charset=UTF-8',
     mp4: 'video/mp4',
     flv: 'video/x-flv',
-    jpg: 'image/jpeg'
+    jpg: 'image/jpeg',
+    css: 'text/css',
+    png: 'image/png',
 };
 
 class Server {
