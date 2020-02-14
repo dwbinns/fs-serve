@@ -1,9 +1,10 @@
-const {createReadStream, promises: {stat}} = require('fs');
-const {join, extname} = require('path');
+const {createReadStream, promises: {stat, readFile}} = require('fs');
+const {join, extname, dirname} = require('path');
 
-var mime={
+const mime={
     js: 'application/javascript;charset=UTF-8',
     html: 'text/html; charset=UTF-8',
+    shtml: 'text/html; charset=UTF-8',
     mp4: 'video/mp4',
     flv: 'video/x-flv',
     jpg: 'image/jpeg',
@@ -11,9 +12,27 @@ var mime={
     png: 'image/png',
 };
 
+const indexDocuments = ["index.html", "index.shtml"];
+
+const extensions = ["html", "shtml"];
+
+async function asyncRegexpReplace(input, regex, replacer) {
+    const substrs = [];
+    let match;
+    let index = 0;
+    while ((match = regex.exec(input)) !== null) {
+        substrs.push(input.slice(index, match.index));
+        substrs.push(replacer(...match));
+        index = regex.lastIndex;
+    }
+    substrs.push(input.slice(index));    
+    return (await Promise.all(substrs)).join('');
+};
+
 class Server {
-    constructor(root) {
+    constructor(root, config) {
         this.root = root;
+        this.config = config;
         this.maxAge = 10;
     }
 
@@ -35,8 +54,17 @@ class Server {
 
     async servePath(filename, req, res) {
         let stats = await stat(filename).catch(e => null);
-        if (stats && stats.isDirectory()) return await this.serveDirectory(filename, stats, req, res);
-        if (stats && stats.isFile()) return await this.serveFile(filename, stats, req, res);
+        if (!stats) {
+            for (let extension of extensions) {
+                let filePath = filename + '.' + extension;
+                if (await stat(filePath).catch(e => false)) {
+                    return await this.servePath(filePath, req, res);
+                }
+            }
+        } else {
+            if (stats.isDirectory()) return await this.serveDirectory(filename, stats, req, res);
+            if (stats.isFile()) return await this.serveFile(filename, stats, req, res);
+        }
         return this.serve404(req, res);
     }
 
@@ -52,8 +80,8 @@ class Server {
         return "";
     }
 
-    serveRedirect(req, res, Location) {
-        res.writeHeader(301, {Location});
+    serveRedirect(req, res, location) {
+        res.writeHeader(301, {Location: location});
         res.end();
         return location; 
     }
@@ -66,7 +94,12 @@ class Server {
         if (!filename.endsWith('/')) {
             return this.serveRedirectSlash(req, res);
         } else {
-            return await this.servePath(`${filename}index.html`, req, res);
+            for (let indexDocument of indexDocuments) {
+                if (await stat(join(filename, indexDocument)).catch(e => false)) {
+                    return await this.servePath(filename + indexDocument, req, res);
+                }
+            }
+            return this.serve404(req, res);
         }
     }
 
@@ -84,15 +117,43 @@ class Server {
             return filename;
         }
 
-        headers['Content-Length'] = stats.size;
-
-        headers['Content-Type'] = mime[extname(filename).slice(1)] || 'application/octet-stream';
+        let ext = extname(filename).slice(1);
+        
+        headers['Content-Type'] = mime[ext] || 'application/octet-stream';
 
         res.writeHead(200, headers);
 
-        createReadStream(filename).pipe(res);
+        if (ext == "shtml" && this.config.ssi) {
+            let response = await this.processSSI(filename);
+            
+            res.end(response);
+        } else {
+            headers['Content-Length'] = stats.size;
+
+            createReadStream(filename).pipe(res);
+        }
 
         return filename;
+    }
+
+    async processSSI(filename) {
+        return await asyncRegexpReplace(
+            await readFile(filename, {encoding: 'utf8'}), 
+            /<!--#([^ ]*) (.*?)-->/g, 
+            async (comment, command, parameters) => {
+                let parameterMap = new Map(
+                    Array.from(
+                        parameters.matchAll(/([^=]*)="([^"]*)"/), 
+                        ([_, key, value]) => [key, value] 
+                    )
+                );
+                if (command == "include" && parameterMap.get('virtual')) {
+                    //return await readFile(join(dirname(filename), parameterMap.get("virtual")), {encoding: "utf8"});
+                    return this.processSSI(join(dirname(filename), parameterMap.get("virtual")));
+                    //return "hi";
+                }
+                return comment;
+        });
     }
 }
     
