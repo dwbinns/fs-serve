@@ -1,4 +1,4 @@
-const {createReadStream, promises: {stat, readFile}} = require('fs');
+const {createReadStream, promises: {stat, readFile, readdir}} = require('fs');
 const {join, extname, dirname} = require('path');
 
 const mime={
@@ -11,6 +11,29 @@ const mime={
     css: 'text/css',
     png: 'image/png',
 };
+
+function escapeEntities(text) {
+    return text.replace(/[<>&'"]/g, function (c) {
+        switch (c) {
+            case '<': return '&lt;';
+            case '>': return '&gt;';
+            case '&': return '&amp;';
+            case '\'': return '&apos;';
+            case '"': return '&quot;';
+        }
+    });
+}
+
+const header = `<!DOCTYPE html>
+<html>
+<head><title>List</title></head>
+<body>
+`;
+
+const trailer = `
+</body>
+</html>
+`;
 
 const indexDocuments = ["index.html", "index.shtml"];
 
@@ -68,6 +91,19 @@ class Server {
         return this.serve404(req, res);
     }
 
+    async serveIndexList(pathname, req, res) {
+        res.writeHeader(200, {});
+        
+        let lines = (await readdir(pathname, {withFileTypes: true}))
+            .filter(entry => !entry.name.startsWith("."))
+            .map(entry => {
+                let htmlName = escapeEntities(entry.name);
+                return `<div><a href='./${htmlName + (entry.isDirectory() ? "/" : "")}'>${htmlName}</a></div>`
+            });
+           
+        res.end(header + lines.join("") + trailer);
+    }
+
     serve500(req, res) {
         res.writeHeader(500, {});
         res.end();
@@ -99,7 +135,8 @@ class Server {
                     return await this.servePath(filename + indexDocument, req, res);
                 }
             }
-            return this.serve404(req, res);
+            return this.serveIndexList(filename, req, res);
+            //return this.serve404(req, res);
         }
     }
 
