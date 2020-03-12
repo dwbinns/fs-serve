@@ -10,6 +10,7 @@ const mime={
     jpg: 'image/jpeg',
     css: 'text/css',
     png: 'image/png',
+    pdf: 'application/pdf',
 };
 
 function escapeEntities(text) {
@@ -97,8 +98,7 @@ class Server {
         let lines = (await readdir(pathname, {withFileTypes: true}))
             .filter(entry => !entry.name.startsWith("."))
             .map(entry => {
-                let htmlName = escapeEntities(entry.name);
-                return `<div><a href='./${htmlName + (entry.isDirectory() ? "/" : "")}'>${htmlName}</a></div>`
+                return `<div><a href='./${encodeURI(escapeEntities(entry.name) + (entry.isDirectory() ? "/" : ""))}'>${escapeEntities(entry.name)}</a></div>`
             });
            
         res.end(header + lines.join("") + trailer);
