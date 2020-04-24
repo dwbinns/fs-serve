@@ -11,6 +11,7 @@ const mime={
     css: 'text/css',
     png: 'image/png',
     pdf: 'application/pdf',
+    svg: 'image/svg+xml',
 };
 
 function escapeEntities(text) {
