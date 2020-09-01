@@ -50,7 +50,7 @@ async function asyncRegexpReplace(input, regex, replacer) {
         substrs.push(replacer(...match));
         index = regex.lastIndex;
     }
-    substrs.push(input.slice(index));    
+    substrs.push(input.slice(index));
     return (await Promise.all(substrs)).join('');
 };
 
@@ -64,7 +64,7 @@ class Server {
     async serve(req, res) {
         try {
             let requestURL = new URL(req.url, "http://localhost");
-    
+
             let result = await this.serveRelative(decodeURI(requestURL.pathname), req, res);
             console.log(req.url, res.statusCode, result);
         } catch (e) {
@@ -95,13 +95,13 @@ class Server {
 
     async serveIndexList(pathname, req, res) {
         res.writeHeader(200, {});
-        
+
         let lines = (await readdir(pathname, {withFileTypes: true}))
             .filter(entry => !entry.name.startsWith("."))
             .map(entry => {
                 return `<div><a href='./${encodeURI(escapeEntities(entry.name) + (entry.isDirectory() ? "/" : ""))}'>${escapeEntities(entry.name)}</a></div>`
             });
-           
+
         res.end(header + lines.join("") + trailer);
     }
 
@@ -120,7 +120,7 @@ class Server {
     serveRedirect(req, res, location) {
         res.writeHeader(301, {Location: location});
         res.end();
-        return location; 
+        return location;
     }
 
     serveRedirectSlash(req, res) {
@@ -147,7 +147,7 @@ class Server {
         let headers = {};
         headers['ETag'] = etag;
         headers['Cache-Control'] = `max-age = ${this.maxAge}`;
-            
+
         let requestEtags = (req.headers['if-none-match'] || '').split(',').map(header => header.trim());
         if (requestEtags.includes(etag)) {
             res.writeHead(304, headers);
@@ -156,14 +156,14 @@ class Server {
         }
 
         let ext = extname(filename).slice(1);
-        
+
         headers['Content-Type'] = mime[ext] || 'application/octet-stream';
 
         res.writeHead(200, headers);
 
         if (ext == "shtml" && this.config.ssi) {
             let response = await this.processSSI(filename);
-            
+
             res.end(response);
         } else {
             headers['Content-Length'] = stats.size;
@@ -176,13 +176,13 @@ class Server {
 
     async processSSI(filename) {
         return await asyncRegexpReplace(
-            await readFile(filename, {encoding: 'utf8'}), 
-            /<!--#([^ ]*) (.*?)-->/g, 
+            await readFile(filename, {encoding: 'utf8'}),
+            /<!--#([^ ]*) (.*?)-->/g,
             async (comment, command, parameters) => {
                 let parameterMap = new Map(
                     Array.from(
-                        parameters.matchAll(/([^=]*)="([^"]*)"/), 
-                        ([_, key, value]) => [key, value] 
+                        parameters.matchAll(/([^=]*)="([^"]*)"/g),
+                        ([_, key, value]) => [key, value]
                     )
                 );
                 if (command == "include" && parameterMap.get('virtual')) {
@@ -194,5 +194,5 @@ class Server {
         });
     }
 }
-    
+
 module.exports = Server;
