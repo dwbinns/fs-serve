@@ -1,14 +1,10 @@
 #!/usr/bin/env node
-const {createServer} = require("http");
 const Server = require(".");
 
-(async(port = 4000, directory = ".") => {
-    let server = new Server(directory);
+(async (port = 4000, directory = ".") => {
+    console.log("fs-serve [<port>] [<directory>]");
 
-    createServer((req, res) => {
-        server.serve(req, res);
-    }).listen(port);
+    new Server(directory, { directoryList: true }).listen(Number(port));
 
     console.log(`Server started http://localhost:${port}/`);
-
 })(...process.argv.slice(2));

@@ -1,7 +1,9 @@
 {
-  "name": "@dwbinns/file-serve",
-  "version": "0.0.1",
+  "name": "fs-serve",
+  "version": "1.0.0",
+  "description": "Serve static files with HTTP",
   "main": "index.js",
   "license": "MIT",
-  "bin": "cli.js"
+  "bin": "./cli.js",
+  "repository": "github:dwbinns/fs-serve"
 }

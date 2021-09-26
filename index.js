@@ -1,12 +1,15 @@
-const {createReadStream, promises: {stat, readFile, readdir}} = require('fs');
-const {join, extname, dirname} = require('path');
+const { createReadStream } = require('fs');
+const { stat, readFile, readdir } = require('fs/promises');
+const { join, extname, dirname } = require('path');
+const { createServer } = require("http");
 
-const mime={
+const mime = {
     shtml: 'text/html; charset=UTF-8',
     mp4: 'video/mp4',
     flv: 'video/x-flv',
-// Following from:
-// https://developer.mozilla.org/en-US/docs/Web/HTTP/Basics_of_HTTP/MIME_types/Common_types
+    md: 'text/markdown',
+    // Following from:
+    // https://developer.mozilla.org/en-US/docs/Web/HTTP/Basics_of_HTTP/MIME_types/Common_types
     aac: 'audio/aac',
     abw: 'application/x-abiword',
     arc: 'application/x-freearc',
@@ -123,11 +126,19 @@ async function asyncRegexpReplace(input, regex, replacer) {
     return (await Promise.all(substrs)).join('');
 };
 
+const defaultLog = (url, statusCode, result) => console.log(url, statusCode, result);
+
 class Server {
-    constructor(root, config = {}) {
+    constructor(root, { log, directoryList, ssi, maxAge } = { log: defaultLog, maxAge: 2 }) {
         this.root = root;
-        this.config = config;
-        this.maxAge = 10;
+        this.directoryList = directoryList;
+        this.ssi = ssi;
+        this.maxAge = maxAge;
+        this.log = log;
+    }
+
+    listen(port) {
+        createServer((req, res) => this.serve(req, res)).listen(port);
     }
 
     async serve(req, res) {
@@ -135,9 +146,9 @@ class Server {
             let requestURL = new URL(req.url, "http://localhost");
 
             let result = await this.serveRelative(decodeURI(requestURL.pathname), req, res);
-            console.log(req.url, res.statusCode, result);
+            this.log?.(req.url, res.statusCode, result);
         } catch (e) {
-            console.log(e);
+            console.error("Request processing error", e);
             this.serve500(req, res);
         }
     }
@@ -163,12 +174,12 @@ class Server {
     }
 
     async serveIndexList(pathname, req, res) {
-        if (!this.config.directoryList) {
-            res.writeHeader(404, {});
+        if (!this.directoryList) {
+            return this.serve404(req, res);
         }
         res.writeHeader(200, {});
 
-        let lines = (await readdir(pathname, {withFileTypes: true}))
+        let lines = (await readdir(pathname, { withFileTypes: true }))
             .filter(entry => !entry.name.startsWith("."))
             .map(entry => {
                 return `<div><a href='./${encodeURI(escapeEntities(entry.name) + (entry.isDirectory() ? "/" : ""))}'>${escapeEntities(entry.name)}</a></div>`
@@ -190,7 +201,7 @@ class Server {
     }
 
     serveRedirect(req, res, location) {
-        res.writeHeader(301, {Location: location});
+        res.writeHeader(301, { Location: location });
         res.end();
         return location;
     }
@@ -234,7 +245,7 @@ class Server {
 
         res.writeHead(200, headers);
 
-        if (ext == "shtml" && this.config.ssi) {
+        if (ext == "shtml" && this.ssi) {
             let response = await this.processSSI(filename);
 
             res.end(response);
@@ -249,7 +260,7 @@ class Server {
 
     async processSSI(filename) {
         return await asyncRegexpReplace(
-            await readFile(filename, {encoding: 'utf8'}),
+            await readFile(filename, { encoding: 'utf8' }),
             /<!--#([^ ]*) (.*?)-->/g,
             async (comment, command, parameters) => {
                 let parameterMap = new Map(
@@ -262,7 +273,7 @@ class Server {
                     return this.processSSI(join(dirname(filename), parameterMap.get("virtual")));
                 }
                 return comment;
-        });
+            });
     }
 }
 
