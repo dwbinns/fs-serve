@@ -1,7 +1,7 @@
 const { createReadStream } = require('fs');
 const { stat, readFile, readdir } = require('fs/promises');
 const { join, extname, dirname } = require('path');
-const { createServer } = require("http");
+const { createServer, get } = require("http");
 
 const mime = {
     shtml: 'text/html; charset=UTF-8',
@@ -98,6 +98,12 @@ function escapeEntities(text) {
     });
 }
 
+async function consume(stream) {
+    let blocks = [];
+    for await (let block of stream) blocks.push(block);
+    return Buffer.concat(blocks);
+}
+
 const header = `<!DOCTYPE html>
 <html>
 <head><title>List</title></head>
@@ -126,10 +132,10 @@ async function asyncRegexpReplace(input, regex, replacer) {
     return (await Promise.all(substrs)).join('');
 };
 
-const defaultLog = (url, statusCode, result) => console.log(url, statusCode, result);
+const defaultLog = (url, statusCode, result) => console.log("Request", url, statusCode, result);
 
 class Server {
-    constructor(root, { log, directoryList, ssi, maxAge } = { log: defaultLog, maxAge: 2 }) {
+    constructor(root, { log = defaultLog, directoryList, ssi, maxAge = 2 } = {}) {
         this.root = root;
         this.directoryList = directoryList;
         this.ssi = ssi;
@@ -223,19 +229,9 @@ class Server {
         }
     }
 
-    async serveFile(filename, stats, req, res) {
-        let etag = `${stats.size}-${stats.mtime.getTime()}`;
-
+    async serveFile(filename, stats, request, res) {
         let headers = {};
-        headers['ETag'] = etag;
         headers['Cache-Control'] = `max-age = ${this.maxAge}`;
-
-        let requestEtags = (req.headers['if-none-match'] || '').split(',').map(header => header.trim());
-        if (requestEtags.includes(etag)) {
-            res.writeHead(304, headers);
-            res.end();
-            return filename;
-        }
 
         let ext = extname(filename).slice(1);
 
@@ -243,37 +239,74 @@ class Server {
         if (mimeType.startsWith("text/")) mimeType += "; charset=UTF-8";
         headers['Content-Type'] = mimeType;
 
-        res.writeHead(200, headers);
-
-        if (ext == "shtml" && this.ssi) {
-            let response = await this.processSSI(filename);
+        let ssiHandlers = this.ssi.find(({ extension }) => extension == ext)?.handlers;
+        if (ssiHandlers) {
+            let response = await this.processSSI(request, filename, ssiHandlers);
 
             res.end(response);
-        } else {
-            headers['Content-Length'] = stats.size;
-
-            createReadStream(filename).pipe(res);
+            return filename;
         }
+
+        let etag = `${stats.size}-${stats.mtime.getTime()}`;
+
+        headers['ETag'] = etag;
+
+        let requestEtags = (request.headers['if-none-match'] || '').split(',').map(header => header.trim());
+        if (requestEtags.includes(etag)) {
+            res.writeHead(304, headers);
+            res.end();
+            return filename;
+        }
+
+        res.writeHead(200, headers);
+
+        headers['Content-Length'] = stats.size;
+
+        createReadStream(filename).pipe(res);
 
         return filename;
     }
 
-    async processSSI(filename) {
-        return await asyncRegexpReplace(
+    async processSSI(request, filename, handlers) {
+        let server = this;
+        return await this.replaceSSI(
+            { server, request, filename },
             await readFile(filename, { encoding: 'utf8' }),
-            /<!--#([^ ]*) (.*?)-->/g,
+            handlers
+        );
+    }
+
+    async replaceSSI(context, input, handlers) {
+        return await asyncRegexpReplace(
+            input,
+            /<!--#([^ ]*?)(.*?)-->/g,
             async (comment, command, parameters) => {
                 let parameterMap = new Map(
-                    Array.from(
-                        parameters.matchAll(/([^=]*)="([^"]*)"/g),
-                        ([_, key, value]) => [key, value]
-                    )
+                    parameters
+                        .split(/ +/)
+                        .map(item => item.match(/([^=]*)(="([^"]*)")?/))
+                        .map(([, key, , value]) => [key, value])
                 );
-                if (command == "include" && parameterMap.get('virtual')) {
-                    return this.processSSI(join(dirname(filename), parameterMap.get("virtual")));
+                for (let handler of handlers) {
+                    let result = await handler({ ...context, command, parameterMap, comment });
+                    if (result) return result;
                 }
                 return comment;
             });
+    }
+
+
+    static async includeFile({ server, request, filename, command, parameterMap }) {
+        if (command == "include" && parameterMap.has('file')) {
+            return await server.processSSI(request, join(dirname(filename), parameterMap.get("file")));
+        }
+    }
+
+    static async includeVirtual({ request, parameterMap }) {
+        if (command == "include" && parameterMap.has('virtual')) {
+            let url = new URL(parameterMap.get("virtual"), `http://${request.headers.host}${request.url}`);
+            return await consume(await new Promise(resolve => get(url, resolve)));
+        }
     }
 }
 

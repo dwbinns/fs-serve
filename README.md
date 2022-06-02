@@ -40,7 +40,6 @@ const server = new Server(directory, {
 ```
 
 - directoryList - set to **true** to enable directory lists - default **false**
-- ssi - set to **true** to enable SSI processing for .shtml files - default **false**
 - log - provide a callback for custom logging, or set to falsy to disable logging - default **console.log**
 - maxAge - how many seconds a client should cache a response - default **2** seconds
 
