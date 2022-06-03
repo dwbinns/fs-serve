@@ -2,6 +2,7 @@ const { createReadStream } = require('fs');
 const { stat, readFile, readdir } = require('fs/promises');
 const { join, extname, dirname } = require('path');
 const { createServer, get } = require("http");
+const { once } = require('events');
 
 const mime = {
     shtml: 'text/html; charset=UTF-8',
@@ -143,8 +144,11 @@ class Server {
         this.log = log;
     }
 
-    listen(port) {
-        createServer((req, res) => this.serve(req, res)).listen(port);
+    async listen(port, host) {
+        let server = createServer((req, res) => this.serve(req, res));
+        server.listen(port, host);
+        await once(server, "listening");
+        return server.address();
     }
 
     async serve(req, res) {
