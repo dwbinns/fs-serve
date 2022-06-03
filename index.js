@@ -136,7 +136,7 @@ async function asyncRegexpReplace(input, regex, replacer) {
 const defaultLog = (url, statusCode, result) => console.log("Request", url, statusCode, result);
 
 class Server {
-    constructor(root, { log = defaultLog, directoryList, ssi, maxAge = 2 } = {}) {
+    constructor(root, { log = defaultLog, directoryList, ssi = [], maxAge = 2 } = {}) {
         this.root = root;
         this.directoryList = directoryList;
         this.ssi = ssi;
