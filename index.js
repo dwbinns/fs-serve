@@ -153,9 +153,11 @@ class Server {
 
     async serve(req, res) {
         try {
-            let requestURL = new URL(req.url, "http://localhost");
+            let filePath = this.root;
+            let stats = await stat(filePath).catch(() => null);
+            let parts = req.url.split("/").slice(1);
+            let result = await this.servePath(filePath, stats, parts, req, res);
 
-            let result = await this.serveRelative(decodeURI(requestURL.pathname), req, res);
             this.log?.(req.url, res.statusCode, result);
         } catch (e) {
             console.error("Request processing error", e);
@@ -163,31 +165,45 @@ class Server {
         }
     }
 
-    async serveRelative(path, req, res) {
-        return await this.servePath(join(this.root, path).replace(/\/$/, ''), req, res);
-    }
+    async servePath(filePath, stats, parts, req, res) {
+        let isTrailingSlash = parts.length == 1 && parts[0] == "";
 
-    async servePath(filename, req, res) {
-        let stats = await stat(filename).catch(() => null);
-        if (!stats) {
-            for (let extension of extensions) {
-                let filePath = filename + '.' + extension;
-                let fileStats = await stat(filePath).catch(() => null);
-                if (fileStats?.isFile()) {
-                    return await this.serveFile(filePath, fileStats, req, res);
-                }
+        if (parts.length && !isTrailingSlash) {
+            let [head, ...tail] = parts;
+            if (head == ".." || head == "." || head == "") {
+                return this.serve404(req, res);
             }
-            while (dirname(filename) != filename) {
-                filename = dirname(filename);
-                let parentStats = await stat(filename).catch(() => null);
-                if (parentStats?.isFile()) {
-                    return await this.serveFile(filename, parentStats, req, res);
-                }
+
+            let childPath = join(filePath, head);
+            let childStats = await stat(childPath).catch(() => null);
+
+            if (childStats) {
+                return await this.servePath(childPath, childStats, tail, req, res);
             }
-        } else {
-            if (stats.isDirectory()) return await this.serveDirectory(filename, stats, req, res);
-            if (stats.isFile()) return await this.serveFile(filename, stats, req, res);
         }
+
+        if (stats.isDirectory()) {
+            if (parts.length == 0) {
+                return this.serveRedirect(req, res, req.url + "/");
+            }
+
+            for (let indexDocument of indexDocuments) {
+                let indexPath = join(filePath, indexDocument);
+                let indexStats = await stat(indexPath).catch(() => null);
+                if (indexStats?.isFile()) {
+                    return await this.serveFile(indexPath, indexStats, req, res);
+                }
+            }
+
+            if (isTrailingSlash) {
+                return await this.serveIndexList(filePath, req, res);
+            }
+        }
+
+        if (stats.isFile()) {
+            return await this.serveFile(filePath, stats, req, res)
+        }
+
         return this.serve404(req, res);
     }
 
@@ -222,25 +238,6 @@ class Server {
         res.writeHeader(301, { Location: location });
         res.end();
         return location;
-    }
-
-    serveRedirectSlash(req, res) {
-        return this.serveRedirect(req, res, req.url + "/");
-    }
-
-    async serveDirectory(filename, stats, req, res) {
-        if (!req.url.endsWith('/')) {
-            return this.serveRedirectSlash(req, res);
-        } else {
-            for (let indexDocument of indexDocuments) {
-                let filePath = join(filename, indexDocument);
-                let indexStats = await stat(filePath).catch(() => null);
-                if (indexStats?.isFile()) {
-                    return await this.serveFile(filePath, indexStats, req, res);
-                }
-            }
-            return this.serveIndexList(filename, req, res);
-        }
     }
 
     async serveFile(filename, stats, request, res) {
