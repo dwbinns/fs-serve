@@ -1,6 +1,6 @@
 {
   "name": "fs-serve",
-  "version": "2.0.3",
+  "version": "2.0.4",
   "description": "Serve static files with HTTP",
   "main": "index.js",
   "license": "MIT",
