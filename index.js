@@ -172,8 +172,17 @@ class Server {
         if (!stats) {
             for (let extension of extensions) {
                 let filePath = filename + '.' + extension;
-                if (await stat(filePath).catch(e => false)) {
-                    return await this.servePath(filePath, req, res);
+                let fileStats = await stat(filePath).catch(() => null);
+                if (fileStats?.isFile()) {
+                    return await this.serveFile(filePath, fileStats, req, res);
+                }
+            }
+            while (dirname(filename) != filename) {
+                filename = dirname(filename);
+                if (!filename.startsWith(this.root)) break;
+                let parentStats = await stat(filename).catch(() => null);
+                if (parentStats?.isFile()) {
+                    return await this.serveFile(filename, parentStats, req, res);
                 }
             }
         } else {
