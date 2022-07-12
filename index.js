@@ -164,11 +164,11 @@ class Server {
     }
 
     async serveRelative(path, req, res) {
-        return await this.servePath(join(this.root, path), req, res);
+        return await this.servePath(join(this.root, path).replace(/\/$/, ''), req, res);
     }
 
     async servePath(filename, req, res) {
-        let stats = await stat(filename).catch(e => null);
+        let stats = await stat(filename).catch(() => null);
         if (!stats) {
             for (let extension of extensions) {
                 let filePath = filename + '.' + extension;
@@ -179,7 +179,6 @@ class Server {
             }
             while (dirname(filename) != filename) {
                 filename = dirname(filename);
-                if (!filename.startsWith(this.root)) break;
                 let parentStats = await stat(filename).catch(() => null);
                 if (parentStats?.isFile()) {
                     return await this.serveFile(filename, parentStats, req, res);
@@ -230,12 +229,14 @@ class Server {
     }
 
     async serveDirectory(filename, stats, req, res) {
-        if (!filename.endsWith('/')) {
+        if (!req.url.endsWith('/')) {
             return this.serveRedirectSlash(req, res);
         } else {
             for (let indexDocument of indexDocuments) {
-                if (await stat(join(filename, indexDocument)).catch(e => false)) {
-                    return await this.servePath(filename + indexDocument, req, res);
+                let filePath = join(filename, indexDocument);
+                let indexStats = await stat(filePath).catch(() => null);
+                if (indexStats?.isFile()) {
+                    return await this.serveFile(filePath, indexStats, req, res);
                 }
             }
             return this.serveIndexList(filename, req, res);
