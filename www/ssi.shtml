@@ -1,0 +1,8 @@
+<html>
+    <head><title>Dynamic include</title></head>
+    <body>
+        <div>included file: <!--#include file="included.txt"--></div>
+        <div>included virtual: <!--#include virtual="included.txt"--></div>
+        <div>included url: <!--#include url="http://localhost:4000/included.txt"--></div>
+    </body>
+</html>

@@ -1,8 +1,8 @@
-const { createReadStream } = require('fs');
-const { stat, readFile, readdir } = require('fs/promises');
-const { join, extname, dirname } = require('path');
-const { createServer, get } = require("http");
-const { once } = require('events');
+import { createReadStream } from 'fs';
+import { stat, readFile, readdir } from 'fs/promises';
+import { join, extname, dirname } from 'path';
+import { createServer, get } from "http";
+import { once } from 'events';
 
 const mime = {
     shtml: 'text/html; charset=UTF-8',
@@ -118,26 +118,25 @@ const trailer = `
 
 const indexDocuments = ["index.html", "index.shtml"];
 
-const extensions = ["html", "shtml"];
-
 async function asyncRegexpReplace(input, regex, replacer) {
-    const substrs = [];
+    const parts = [];
     let match;
     let index = 0;
     while ((match = regex.exec(input)) !== null) {
-        substrs.push(input.slice(index, match.index));
-        substrs.push(replacer(...match));
+        parts.push(input.slice(index, match.index));
+        parts.push(replacer(...match));
         index = regex.lastIndex;
     }
-    substrs.push(input.slice(index));
-    return (await Promise.all(substrs)).join('');
+    parts.push(input.slice(index));
+    return (await Promise.all(parts)).join('');
 };
 
-const defaultLog = (url, statusCode, result) => console.log("Request", url, statusCode, result);
+const defaultLog = (url, statusCode, result) => console.log("Request", statusCode, url, result);
 
 class Server {
-    constructor(root, { log = defaultLog, directoryList, ssi = [], maxAge = 2 } = {}) {
+    constructor(root, { log = defaultLog, directoryList, ssi = [], maxAge = 2, extensions = []} = {}) {
         this.root = root;
+        this.extensions = extensions;
         this.directoryList = directoryList;
         this.ssi = ssi;
         this.maxAge = maxAge;
@@ -148,25 +147,41 @@ class Server {
         let server = createServer((req, res) => this.serve(req, res));
         server.listen(port, host);
         await once(server, "listening");
-        return server.address();
+        return server;
     }
 
-    async serve(req, res) {
+    async serve(request, response) {
         try {
-            let filePath = this.root;
-            let stats = await stat(filePath).catch(() => null);
-            let parts = req.url.split("/").slice(1);
-            let result = await this.servePath(filePath, stats, parts, req, res);
+            let url = new URL(request.url, "http://host");
+            let result = await this.serveURL(url, request.headers);
+            let status = result.status || 200;
+            response.writeHeader(status, result.headers || {});
+            if (result.body) response.end(result.body);
+            else if (result.stream) result.stream.pipe(response);
+            else response.end();
 
-            this.log?.(req.url, res.statusCode, result);
+            this.log?.(request.url, status, result.comment || '');
         } catch (e) {
             console.error("Request processing error", e);
-            this.serve500(req, res);
+            response.writeHeader(500, {});
+            response.end();
         }
     }
 
-    async servePath(filePath, stats, parts, req, res) {
+    async serveURL(url, headers) {
+        let parts = decodeURIComponent(url.pathname).split("/").slice(1);
+        let filePath = this.root;
+        let stats = await stat(filePath).catch(() => null);
+        return await this.servePath(url, headers, filePath, stats, parts);
+
+    }
+
+    async servePath(url, headers, filePath, stats, parts) {
         let isTrailingSlash = parts.length == 1 && parts[0] == "";
+
+        if (!stats) {
+            return this.serve404();
+        }
 
         if (parts.length && !isTrailingSlash) {
             let [head, ...tail] = parts;
@@ -174,44 +189,47 @@ class Server {
                 return this.serve404(req, res);
             }
 
-            let childPath = join(filePath, head);
-            let childStats = await stat(childPath).catch(() => null);
+            let extensions = [null, ...this.extensions];
 
-            if (childStats) {
-                return await this.servePath(childPath, childStats, tail, req, res);
+            for (let extension of extensions) {
+                let childPath = join(filePath, extension ? `${head}.${extension}` : head);
+                let childStats = await stat(childPath).catch(() => null);
+
+                if (childStats) {
+                    return await this.servePath(url, headers, childPath, childStats, tail);
+                }
             }
         }
 
         if (stats.isDirectory()) {
             if (parts.length == 0) {
-                return this.serveRedirect(req, res, req.url + "/");
+                return this.serveRedirect(url.pathname + "/");
             }
 
             for (let indexDocument of indexDocuments) {
                 let indexPath = join(filePath, indexDocument);
                 let indexStats = await stat(indexPath).catch(() => null);
                 if (indexStats?.isFile()) {
-                    return await this.serveFile(indexPath, indexStats, req, res);
+                    return await this.serveFile(url, headers, indexPath, indexStats);
                 }
             }
 
             if (isTrailingSlash) {
-                return await this.serveIndexList(filePath, req, res);
+                return await this.serveIndexList(filePath);
             }
         }
 
         if (stats.isFile()) {
-            return await this.serveFile(filePath, stats, req, res)
+            return await this.serveFile(url, headers, filePath, stats)
         }
 
-        return this.serve404(req, res);
+        return this.serve404();
     }
 
-    async serveIndexList(pathname, req, res) {
+    async serveIndexList(pathname) {
         if (!this.directoryList) {
-            return this.serve404(req, res);
+            return this.serve404();
         }
-        res.writeHeader(200, {});
 
         let lines = (await readdir(pathname, { withFileTypes: true }))
             .filter(entry => !entry.name.startsWith("."))
@@ -219,69 +237,62 @@ class Server {
                 return `<div><a href='./${encodeURI(escapeEntities(entry.name) + (entry.isDirectory() ? "/" : ""))}'>${escapeEntities(entry.name)}</a></div>`
             });
 
-        res.end(header + lines.join("") + trailer);
+        return {
+            body: header + lines.join("") + trailer
+        }
     }
 
-    serve500(req, res) {
-        res.writeHeader(500, {});
-        res.end();
-        return "";
+    serve500() {
+        return { status: 500 };
     }
 
-    serve404(req, res) {
-        res.writeHeader(404, {});
-        res.end();
-        return "";
+    serve404() {
+        return { status: 404 };
     }
 
-    serveRedirect(req, res, location) {
-        res.writeHeader(301, { Location: location });
-        res.end();
-        return location;
+    serveRedirect(location) {
+        return { status: 301, headers: { location } }
     }
 
-    async serveFile(filename, stats, request, res) {
-        let headers = {};
-        headers['Cache-Control'] = `max-age = ${this.maxAge}`;
+    async serveFile(url, requestHeaders, filename, stats) {
+        let responseHeaders = {};
+        responseHeaders['Cache-Control'] = `max-age = ${this.maxAge}`;
 
         let ext = extname(filename).slice(1);
 
         let mimeType = mime[ext] || 'application/octet-stream';
         if (mimeType.startsWith("text/")) mimeType += "; charset=UTF-8";
-        headers['Content-Type'] = mimeType;
+        responseHeaders['Content-Type'] = mimeType;
 
         let ssiHandlers = this.ssi.find(({ extension }) => extension == ext)?.handlers;
         if (ssiHandlers) {
-            let response = await this.processSSI(request, filename, ssiHandlers);
-
-            res.end(response);
-            return filename;
+            let body = await this.processSSI(url, requestHeaders, filename, ssiHandlers);
+            return { headers: responseHeaders, body }
         }
 
         let etag = `${stats.size}-${stats.mtime.getTime()}`;
 
-        headers['ETag'] = etag;
+        responseHeaders['ETag'] = etag;
 
-        let requestEtags = (request.headers['if-none-match'] || '').split(',').map(header => header.trim());
+        let requestEtags = (requestHeaders['if-none-match'] || '').split(',').map(header => header.trim());
         if (requestEtags.includes(etag)) {
-            res.writeHead(304, headers);
-            res.end();
-            return filename;
+            return { status: 304, headers: responseHeaders, coment: filename };
         }
 
-        res.writeHead(200, headers);
+        responseHeaders['Content-Length'] = stats.size;
 
-        headers['Content-Length'] = stats.size;
 
-        createReadStream(filename).pipe(res);
-
-        return filename;
+        return {
+            headers: responseHeaders,
+            stream: createReadStream(filename),
+            comment: filename
+        };
     }
 
-    async processSSI(request, filename, handlers) {
+    async processSSI(url, requestHeaders, filename, handlers) {
         let server = this;
         return await this.replaceSSI(
-            { server, request, filename },
+            { url, requestHeaders, server, filename },
             await readFile(filename, { encoding: 'utf8' }),
             handlers
         );
@@ -290,7 +301,7 @@ class Server {
     async replaceSSI(context, input, handlers) {
         return await asyncRegexpReplace(
             input,
-            /<!--#([^ ]*?)(.*?)-->/g,
+            /<!--#([^ ]*)(.*?)-->/g,
             async (comment, command, parameters) => {
                 let parameterMap = new Map(
                     parameters
@@ -307,18 +318,30 @@ class Server {
     }
 
 
-    static async includeFile({ server, request, filename, command, parameterMap }) {
+    static async includeFile({ url, server, filename, command, parameterMap }) {
         if (command == "include" && parameterMap.has('file')) {
-            return await server.processSSI(request, join(dirname(filename), parameterMap.get("file")));
+            return await server.processSSI(url, {}, join(dirname(filename), parameterMap.get("file")));
         }
     }
 
-    static async includeVirtual({ request, parameterMap }) {
+    static async includeVirtual({ url, server, command, parameterMap }) {
         if (command == "include" && parameterMap.has('virtual')) {
-            let url = new URL(parameterMap.get("virtual"), `http://${request.headers.host}${request.url}`);
-            return await consume(await new Promise(resolve => get(url, resolve)));
+            let includeUrl = new URL(parameterMap.get("virtual"), url);
+
+            //return await consume(await new Promise(resolve => get(url, resolve)));
+            let result = await server.serveURL(includeUrl, {});
+            if (result.stream) return await consume(result.stream);
+            if (result.body) return result.body;
+            return '';
+        }
+    }
+
+    static async includeURL({ url, command, parameterMap }) {
+        if (command == "include" && parameterMap.has('url')) {
+            let includeUrl = new URL(parameterMap.get("url"), url);
+            return await (await fetch(includeUrl)).text();
         }
     }
 }
 
-module.exports = Server;
+export default Server;
