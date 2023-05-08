@@ -1,7 +1,8 @@
 import { createReadStream } from 'fs';
 import { stat, readFile, readdir } from 'fs/promises';
 import { join, extname, dirname } from 'path';
-import { createServer, get } from "http";
+import http from "http";
+import https from "https";
 import { once } from 'events';
 
 const mime = {
@@ -134,7 +135,7 @@ async function asyncRegexpReplace(input, regex, replacer) {
 const defaultLog = (url, statusCode, result) => console.log("Request", statusCode, url, result);
 
 class Server {
-    constructor(root, { log = defaultLog, directoryList, ssi = [], maxAge = 2, extensions = []} = {}) {
+    constructor(root, { log = defaultLog, directoryList, ssi = [], maxAge = 2, extensions = [] } = {}) {
         this.root = root;
         this.extensions = extensions;
         this.directoryList = directoryList;
@@ -143,16 +144,21 @@ class Server {
         this.log = log;
     }
 
-    async listen(port, host) {
-        let server = createServer((req, res) => this.serve(req, res));
+    async listen(port, host, options) {
+        let protocol = options.key ? "https" : "http";
+        let server = {http, https}[protocol].createServer(options, (req, res) => this.serve(req, res));
         server.listen(port, host);
         await once(server, "listening");
         return server;
     }
 
     async serve(request, response) {
+        await this.serveRelative(request.url, request, response);
+    }
+
+    async serveRelative(pathname, request, response) {
         try {
-            let url = new URL(request.url, "http://host");
+            let url = new URL(pathname, `http://${request.headers.host}`);
             let result = await this.serveURL(url, request.headers);
             let status = result.status || 200;
             response.writeHeader(status, result.headers || {});
@@ -169,7 +175,7 @@ class Server {
     }
 
     async serveURL(url, headers) {
-        let parts = decodeURIComponent(url.pathname).split("/").slice(1);
+        let parts = decodeURIComponent(url.pathname.slice(1)).split("/");
         let filePath = this.root;
         let stats = await stat(filePath).catch(() => null);
         return await this.servePath(url, headers, filePath, stats, parts);

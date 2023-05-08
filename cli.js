@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readFile } from "node:fs/promises";
 import Server from "./index.js";
 import child_process from "child_process";
 
@@ -11,7 +12,7 @@ const ssiHandlers = {
 (async (...options) => {
 
 
-    let directory = ".", listenPort, listenHost = "localhost", open = false, ssi = [], maxAge, extensions = [];
+    let directory = ".", listenPort, listenHost = "localhost", open = false, ssi = [], maxAge, extensions = [], key, cert;
     while (options.length) {
         let option = options.shift();
         if (option == "path") directory = options.shift();
@@ -19,6 +20,7 @@ const ssiHandlers = {
         else if (option == "host") listenHost = options.shift();
         else if (option == "open") open = true;
         else if (option == "age") maxAge = Number(options.shift());
+        else if (option == "https") [key, cert] = await Promise.all(options.splice(0, 2).map(name => readFile(name)))
         else if (option == "extensions") extensions.push(...options.shift().split(","));
         else if (option.startsWith("ssi.")) ssi.push({
             extension: option.slice("ssi.".length),
@@ -30,6 +32,7 @@ const ssiHandlers = {
             console.log("path: content served from this directory (the current directory by default)");
             console.log("port: listen on the specified port (4000 by default)");
             console.log("host: listen on the specified host (localhost by default)");
+            console.log("https <key.pem> <cert.pem>: use HTTPS with the given private key and certificate");
             console.log("ssi: server side include processing will be performed on the given extension with the given handlers (disabled by default)");
             console.log("    available handlers:", Object.keys(ssiHandlers).join(","));
             console.log("open: open the default browser");
@@ -40,10 +43,13 @@ const ssiHandlers = {
         }
     }
 
-    let server = new Server(directory, { directoryList: true, ssi, extensions, maxAge});
+    let server = new Server(directory, { directoryList: true, ssi, extensions, maxAge });
 
-    let { address, port, family } = (await server.listen(listenPort || 4000, listenHost).catch(e => server.listen(listenPort, listenHost))).address();
+    let listenOptions = {key, cert};
+
+    let { address, port, family } = (await server.listen(listenPort || 4000, listenHost, listenOptions).catch(e => server.listen(listenPort, listenHost, listenOptions))).address();
     let url = `http://${family == "IPv6" ? `[${address}]` : address}:${port}/`;
+    console.log("For help run: fs-serve help");
     console.log(`Server started ${url}`);
 
     if (open) {
