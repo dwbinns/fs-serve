@@ -88,6 +88,14 @@ const mime = {
     '7z': 'application/x-7z-compressed',
 };
 
+export function mimeTypeFor(filename) {
+    let ext = extname(filename).slice(1);
+
+    let mimeType = mime[ext] || 'application/octet-stream';
+    if (mimeType.startsWith("text/")) mimeType += "; charset=UTF-8";
+    return mimeType;
+}
+
 function escapeEntities(text) {
     return text.replace(/[<>&'"]/g, function (c) {
         switch (c) {
@@ -264,11 +272,7 @@ class Server {
         let responseHeaders = {};
         responseHeaders['Cache-Control'] = `max-age = ${this.maxAge}`;
 
-        let ext = extname(filename).slice(1);
-
-        let mimeType = mime[ext] || 'application/octet-stream';
-        if (mimeType.startsWith("text/")) mimeType += "; charset=UTF-8";
-        responseHeaders['Content-Type'] = mimeType;
+        responseHeaders['Content-Type'] = mimeTypeFor(filename);
 
         let ssiHandlers = this.ssi.find(({ extension }) => extension == ext)?.handlers;
         if (ssiHandlers) {
