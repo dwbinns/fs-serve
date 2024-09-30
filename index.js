@@ -6,7 +6,7 @@ import https from "https";
 import { once } from 'events';
 
 const mime = {
-    shtml: 'text/html; charset=UTF-8',
+    shtml: 'text/html',
     mp4: 'video/mp4',
     flv: 'video/x-flv',
     md: 'text/markdown',
@@ -127,23 +127,10 @@ const trailer = `
 
 const indexDocuments = ["index.html", "index.shtml"];
 
-async function asyncRegexpReplace(input, regex, replacer) {
-    const parts = [];
-    let match;
-    let index = 0;
-    while ((match = regex.exec(input)) !== null) {
-        parts.push(input.slice(index, match.index));
-        parts.push(replacer(...match));
-        index = regex.lastIndex;
-    }
-    parts.push(input.slice(index));
-    return (await Promise.all(parts)).join('');
-};
-
 const defaultLog = (url, statusCode, result) => console.log("Request", statusCode, url, result);
 
 class Server {
-    constructor(root, { log = defaultLog, directoryList, ssi = [], maxAge = 2, extensions = [] } = {}) {
+    constructor(root, { log = defaultLog, directoryList = false, ssi = [], maxAge = 2, extensions = [] } = {}) {
         this.root = root;
         this.extensions = extensions;
         this.directoryList = directoryList;
@@ -184,13 +171,17 @@ class Server {
 
     async serveURL(url, headers) {
         let parts = decodeURIComponent(url.pathname.slice(1)).split("/");
-        let filePath = this.root;
-        let stats = await stat(filePath).catch(() => null);
-        return await this.servePath(url, headers, filePath, stats, parts);
+        return await this.servePathParts(parts, headers);
 
     }
 
-    async servePath(url, headers, filePath, stats, parts) {
+    async servePathParts(parts, headers) {
+        let filePath = this.root;
+        let stats = await stat(filePath).catch(() => null);
+        return await this.servePath(headers, filePath, stats, parts, parts);
+    }
+
+    async servePath(headers, filePath, stats, parts, context) {
         let isTrailingSlash = parts.length == 1 && parts[0] == "";
 
         if (!stats) {
@@ -200,7 +191,7 @@ class Server {
         if (parts.length && !isTrailingSlash) {
             let [head, ...tail] = parts;
             if (head == ".." || head == "." || head == "") {
-                return this.serve404(req, res);
+                return this.serve404();
             }
 
             let extensions = [null, ...this.extensions];
@@ -210,21 +201,21 @@ class Server {
                 let childStats = await stat(childPath).catch(() => null);
 
                 if (childStats) {
-                    return await this.servePath(url, headers, childPath, childStats, tail);
+                    return await this.servePath(headers, childPath, childStats, tail, context);
                 }
             }
         }
 
         if (stats.isDirectory()) {
             if (parts.length == 0) {
-                return this.serveRedirect(url.pathname + "/");
+                return this.serveRedirect(`/${context.join("/")}/`);
             }
 
             for (let indexDocument of indexDocuments) {
                 let indexPath = join(filePath, indexDocument);
                 let indexStats = await stat(indexPath).catch(() => null);
                 if (indexStats?.isFile()) {
-                    return await this.serveFile(url, headers, indexPath, indexStats);
+                    return await this.serveFile(headers, indexPath, indexStats);
                 }
             }
 
@@ -234,7 +225,7 @@ class Server {
         }
 
         if (stats.isFile()) {
-            return await this.serveFile(url, headers, filePath, stats)
+            return await this.serveFile(headers, filePath, stats)
         }
 
         return this.serve404();
@@ -268,17 +259,11 @@ class Server {
         return { status: 301, headers: { location } }
     }
 
-    async serveFile(url, requestHeaders, filename, stats) {
+    async serveFile(requestHeaders, filename, stats) {
         let responseHeaders = {};
         responseHeaders['Cache-Control'] = `max-age = ${this.maxAge}`;
 
         responseHeaders['Content-Type'] = mimeTypeFor(filename);
-
-        let ssiHandlers = this.ssi.find(({ extension }) => extension == ext)?.handlers;
-        if (ssiHandlers) {
-            let body = await this.processSSI(url, requestHeaders, filename, ssiHandlers);
-            return { headers: responseHeaders, body }
-        }
 
         let etag = `${stats.size}-${stats.mtime.getTime()}`;
 
@@ -297,60 +282,6 @@ class Server {
             stream: createReadStream(filename),
             comment: filename
         };
-    }
-
-    async processSSI(url, requestHeaders, filename, handlers) {
-        let server = this;
-        return await this.replaceSSI(
-            { url, requestHeaders, server, filename },
-            await readFile(filename, { encoding: 'utf8' }),
-            handlers
-        );
-    }
-
-    async replaceSSI(context, input, handlers) {
-        return await asyncRegexpReplace(
-            input,
-            /<!--#([^ ]*)(.*?)-->/g,
-            async (comment, command, parameters) => {
-                let parameterMap = new Map(
-                    parameters
-                        .split(/ +/)
-                        .map(item => item.match(/([^=]*)(="([^"]*)")?/))
-                        .map(([, key, , value]) => [key, value])
-                );
-                for (let handler of handlers) {
-                    let result = await handler({ ...context, command, parameterMap, comment });
-                    if (result) return result;
-                }
-                return comment;
-            });
-    }
-
-
-    static async includeFile({ url, server, filename, command, parameterMap }) {
-        if (command == "include" && parameterMap.has('file')) {
-            return await server.processSSI(url, {}, join(dirname(filename), parameterMap.get("file")));
-        }
-    }
-
-    static async includeVirtual({ url, server, command, parameterMap }) {
-        if (command == "include" && parameterMap.has('virtual')) {
-            let includeUrl = new URL(parameterMap.get("virtual"), url);
-
-            //return await consume(await new Promise(resolve => get(url, resolve)));
-            let result = await server.serveURL(includeUrl, {});
-            if (result.stream) return await consume(result.stream);
-            if (result.body) return result.body;
-            return '';
-        }
-    }
-
-    static async includeURL({ url, command, parameterMap }) {
-        if (command == "include" && parameterMap.has('url')) {
-            let includeUrl = new URL(parameterMap.get("url"), url);
-            return await (await fetch(includeUrl)).text();
-        }
     }
 }
 
