@@ -141,7 +141,7 @@ class Server {
 
     async listen(port, host, options) {
         let protocol = options.key ? "https" : "http";
-        let server = {http, https}[protocol].createServer(options, (req, res) => this.serve(req, res));
+        let server = { http, https }[protocol].createServer(options, (req, res) => this.serve(req, res));
         server.listen(port, host);
         await once(server, "listening");
         return server;
@@ -151,9 +151,13 @@ class Server {
         await this.serveRelative(request.url, request, response);
     }
 
+    getRequestURL(request, pathname = request.url) {
+        return new URL(pathname, `http://${request.headers.host}`);
+    }
+
     async serveRelative(pathname, request, response) {
         try {
-            let url = new URL(pathname, `http://${request.headers.host}`);
+            let url = this.getRequestURL(request, pathname);
             let result = await this.serveURL(url, request.headers);
             let status = result.status || 200;
             response.writeHeader(status, result.headers || {});
@@ -166,6 +170,7 @@ class Server {
             console.error("Request processing error", e);
             response.writeHeader(500, {});
             response.end();
+            this.log?.(request.url, 500, e?.message);
         }
     }
 
@@ -278,9 +283,11 @@ class Server {
 
 
         return {
+            status: 200,
             headers: responseHeaders,
             stream: createReadStream(filename),
-            comment: filename
+            comment: filename,
+            path: filename,
         };
     }
 }
