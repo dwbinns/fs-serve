@@ -10,6 +10,7 @@ const mime = {
     mp4: 'video/mp4',
     flv: 'video/x-flv',
     md: 'text/markdown',
+    wasm: 'application/wasm',
     // Following from:
     // https://developer.mozilla.org/en-US/docs/Web/HTTP/Basics_of_HTTP/MIME_types/Common_types
     aac: 'audio/aac',
